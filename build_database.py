@@ -34,6 +34,7 @@ import pickle
 import numpy as np
 from PIL import Image                      # Pillow — image loading
 import torch
+from torchvision import transforms         # Data augmentation pipeline
 from facenet_pytorch import MTCNN, InceptionResnetV1  # FaceNet ecosystem
 
 from utils import save_database
@@ -58,6 +59,14 @@ def parse_args():
     parser.add_argument(
         "--min-face-size", type=int, default=40,
         help="Smallest face (in pixels) that MTCNN will attempt to detect."
+    )
+    parser.add_argument(
+        "--augmentations", type=int, default=10,
+        help=(
+            "Number of augmented variants to generate per original image. "
+            "Set to 1 to disable augmentation (use raw image only). "
+            "Higher values produce a larger, more diverse embedding database."
+        )
     )
     return parser.parse_args()
 
@@ -121,54 +130,123 @@ def load_models(device: torch.device):
 
 
 # ---------------------------------------------------------------------------
-# Core embedding logic
+# Data augmentation pipeline
 # ---------------------------------------------------------------------------
+
+# Each transform simulates a real-world capture condition that the live camera
+# will encounter during the demo. By exposing FaceNet to these variations at
+# enrolment time we increase the chance that at least one stored embedding
+# closely matches whatever angle/lighting the camera sees at recognition time.
+#
+# Why these six transforms specifically:
+#   RandomHorizontalFlip    — person turns their head left or right
+#   ColorJitter             — varying room lighting, warm vs cool white bulbs
+#   RandomRotation          — slight head tilt (nodding, looking at phone)
+#   GaussianBlur            — camera defocus or subject moving quickly
+#   RandomPerspective       — camera held at an angle, not perfectly frontal
+#   RandomGrayscale         — very low light causes the camera to drop to mono
+#
+# NOTE: transforms are applied to PIL images BEFORE MTCNN, so MTCNN still
+# performs its own normalisation step on the output crop.
+AUGMENTER = transforms.Compose([
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3),
+    transforms.RandomRotation(degrees=15),
+    transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
+    transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
+    transforms.RandomGrayscale(p=0.1),
+])
+
+def embed_pil_image(
+    base_img: Image.Image,
+    mtcnn: MTCNN,
+    facenet: InceptionResnetV1,
+    device: torch.device,
+    num_augmentations: int = 10,
+) -> list[np.ndarray]:
+    """
+    Apply augmentation to a PIL image and compute multiple face embeddings.
+
+    Pipeline for one image:
+        PIL RGB image
+            └─ AUGMENTER × num_augmentations
+                  └─ MTCNN (detect + align) → 160×160 crop
+                        └─ FaceNet → 512-dim embedding
+                              └─ list of numpy arrays
+
+    Why generate multiple embeddings per photo?
+        FaceNet's recognition quality depends on how well the stored embeddings
+        cover the range of poses and lighting conditions seen at query time.
+        With only a handful of photos per person, the raw images alone may not
+        capture enough variation. Augmentation artificially widens this coverage
+        without requiring additional photos.
+
+        Full-embedding matching (taking the minimum distance at query time)
+        benefits most from this strategy: the larger and more diverse the set
+        of stored embeddings, the more likely one of them will closely match
+        whatever angle the live camera captures.
+
+        We deliberately chose full-embedding matching over centroid matching
+        for this reason — averaging all embeddings into one centroid would
+        destroy the pose diversity that augmentation worked to create.
+
+    Args:
+        base_img:           PIL RGB image.
+        mtcnn:              Initialised MTCNN model.
+        facenet:            Initialised FaceNet model.
+        device:             Compute device (CPU / CUDA).
+        num_augmentations:  How many augmented variants to generate per image.
+                            Set to 1 to use the raw image only (no augmentation).
+
+    Returns:
+        List of 512-dim numpy arrays, one per successful face detection.
+        Returns an empty list if MTCNN finds no face in any variant.
+    """
+    embeddings = []
+
+    for i in range(num_augmentations):
+        # Apply the augmentation pipeline to produce one variant of the image.
+        # When num_augmentations == 1 we skip augmentation and use the raw
+        # image so the function degrades gracefully to the original behaviour.
+        aug_img = AUGMENTER(base_img) if num_augmentations > 1 else base_img
+
+        # Run MTCNN — returns a (3, 160, 160) float tensor if a face is found,
+        # or None if no face exceeds the confidence thresholds.
+        # keep_all=False ensures we get exactly one crop per augmented image.
+        face_tensor = mtcnn(aug_img)
+
+        if face_tensor is None:
+            # The augmentation may have distorted the face beyond MTCNN's
+            # detection threshold — skip this variant silently.
+            continue
+
+        # Add a batch dimension: (3, 160, 160) → (1, 3, 160, 160)
+        face_tensor = face_tensor.unsqueeze(0).to(device)
+
+        # Compute the embedding with gradient tracking disabled (inference only)
+        with torch.no_grad():
+            embedding = facenet(face_tensor)  # shape: (1, 512)
+
+        # Detach, move to CPU, flatten to 1-D numpy array of shape (512,)
+        embeddings.append(embedding.squeeze().cpu().numpy())
+
+    return embeddings
+
 
 def embed_image(
     image_path: str,
     mtcnn: MTCNN,
     facenet: InceptionResnetV1,
-    device: torch.device
-) -> np.ndarray | None:
-    """
-    Detect the face in a single image, align it, and compute its embedding.
-
-    Pipeline for one image:
-        Raw JPEG/PNG  →  MTCNN  →  160×160 aligned crop  →  FaceNet  →  128-dim vector
-
-    Args:
-        image_path: Path to the image file on disk.
-        mtcnn:      Initialised MTCNN model.
-        facenet:    Initialised FaceNet model.
-        device:     Compute device (CPU / CUDA).
-
-    Returns:
-        128-dim numpy array if a face was detected, otherwise None.
-    """
-    # Load the image as a PIL RGB image (MTCNN expects RGB, not BGR like OpenCV)
+    device: torch.device,
+    num_augmentations: int = 10,
+) -> list[np.ndarray]:
+    """Load an image from disk and compute augmented face embeddings."""
     try:
-        img = Image.open(image_path).convert("RGB")
+        base_img = Image.open(image_path).convert("RGB")
     except Exception as e:
         print(f"  [skip] Could not open '{image_path}': {e}")
-        return None
-
-    # Run MTCNN — returns a (1, 3, 160, 160) float tensor if a face is found,
-    # or None if no face exceeds the confidence thresholds
-    face_tensor = mtcnn(img)
-
-    if face_tensor is None:
-        print(f"  [skip] No face detected in '{image_path}'")
-        return None
-
-    # Add a batch dimension: (3, 160, 160) → (1, 3, 160, 160)
-    face_tensor = face_tensor.unsqueeze(0).to(device)
-
-    # Compute the 128-dim embedding with gradient tracking disabled (we are not training)
-    with torch.no_grad():
-        embedding = facenet(face_tensor)  # shape: (1, 128)
-
-    # Detach from the computation graph, move to CPU, convert to numpy 1-D array
-    return embedding.squeeze().cpu().numpy()   # shape: (128,)
+        return []
+    return embed_pil_image(base_img, mtcnn, facenet, device, num_augmentations)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +254,7 @@ def embed_image(
 # ---------------------------------------------------------------------------
 
 def build_database(dataset_dir: str, mtcnn: MTCNN, facenet: InceptionResnetV1,
-                   device: torch.device) -> dict:
+                   device: torch.device, num_augmentations: int = 10) -> dict:
     """
     Walk the dataset directory tree and build a dictionary of embeddings.
 
@@ -189,19 +267,33 @@ def build_database(dataset_dir: str, mtcnn: MTCNN, facenet: InceptionResnetV1,
             PersonName2/
                 ...
 
-    For each person we collect all their embeddings into a list. During
-    recognition (recognize.py) we compare the query embedding against every
-    stored embedding and take the closest match.
+    For each image we generate num_augmentations variants via AUGMENTER, then
+    embed each variant with FaceNet. All resulting embeddings are stored in a
+    flat list per person.
+
+    During recognition (recognize.py) we compare the query embedding against
+    every stored embedding and take the minimum distance — so a larger, more
+    diverse embedding list directly improves recognition robustness.
+
+    Why not use centroid (average embedding) instead?
+        Averaging all embeddings into one centroid collapses pose diversity:
+        a centroid computed from frontal + left-profile + right-profile
+        embeddings lands in a region that does not correspond to any real face.
+        Full-embedding matching avoids this problem entirely — it only requires
+        one stored embedding to match the current camera angle.
+        This matters even more when live camera enrolment (multiple angles) is
+        added in a later phase.
 
     Args:
-        dataset_dir: Root path of the labelled image dataset.
-        mtcnn:       Initialised MTCNN model.
-        facenet:     Initialised FaceNet model.
-        device:      Compute device.
+        dataset_dir:        Root path of the labelled image dataset.
+        mtcnn:              Initialised MTCNN model.
+        facenet:            Initialised FaceNet model.
+        device:             Compute device.
+        num_augmentations:  Augmented variants to generate per source image.
 
     Returns:
         Dictionary  { "PersonName": [emb_1, emb_2, ...], ... }
-        where each emb_i is a numpy array of shape (128,).
+        where each emb_i is a numpy array of shape (512,).
     """
     database = {}
 
@@ -238,14 +330,16 @@ def build_database(dataset_dir: str, mtcnn: MTCNN, facenet: InceptionResnetV1,
 
         for image_file in image_files:
             image_path = os.path.join(person_folder, image_file)
-            print(f"  → {image_file}", end=" ")
+            print(f"  → {image_file} ", end="")
 
-            embedding = embed_image(image_path, mtcnn, facenet, device)
+            # embed_image now returns a list of embeddings (one per augmentation)
+            new_embeddings = embed_image(
+                image_path, mtcnn, facenet, device, num_augmentations
+            )
 
-            if embedding is not None:
-                embeddings.append(embedding)
-                print(f"✓  (vector norm: {np.linalg.norm(embedding):.3f})")
-            # If embedding is None, embed_image already printed a skip message
+            embeddings.extend(new_embeddings)   # flatten into the person's list
+            print(f"✓  +{len(new_embeddings)} embeddings "
+                  f"(total so far: {len(embeddings)})")
 
         if embeddings:
             database[person_name] = embeddings
@@ -274,7 +368,11 @@ if __name__ == "__main__":
 
     # Build the embedding database by processing all images
     print(f"\n[build] Reading images from '{args.dataset}' …")
-    database = build_database(args.dataset, mtcnn, facenet, device)
+    print(f"[build] Augmentations per image: {args.augmentations}")
+    database = build_database(
+        args.dataset, mtcnn, facenet, device,
+        num_augmentations=args.augmentations
+    )
 
     # Persist the database to disk so recognize.py can load it at startup
     save_database(database, args.output)

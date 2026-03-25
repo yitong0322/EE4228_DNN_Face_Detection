@@ -3,6 +3,8 @@ app.py
 ------
 Flask web application integrating face database building and real-time recognition.
 
+Reuses logic from build_database.py, recognize.py, and utils.py — no duplication.
+
 Usage:
     python app.py [--camera 1] [--threshold 1.0] [--port 5001]
 """
@@ -19,7 +21,6 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
-from facenet_pytorch import MTCNN, InceptionResnetV1
 from flask import Flask, render_template, Response, request, jsonify
 
 from utils import (
@@ -28,6 +29,14 @@ from utils import (
     save_database,
     draw_face_box,
     draw_fps,
+)
+from build_database import (
+    load_models as load_build_models,
+    embed_pil_image,
+)
+from recognize import (
+    load_models as load_recog_models,
+    process_frame,
 )
 
 # ---------------------------------------------------------------------------
@@ -52,7 +61,7 @@ database = {}
 DATABASE_PATH = "database/faces.pkl"
 THRESHOLD = 1.0
 
-# Unknown people buffer: {uid: {"embedding": np.array, "thumbnail": base64_str, "name": ""}}
+# Unknown people buffer: {uid: {"embeddings": [...], "thumbnail": base64_str, "name": ""}}
 unknown_people = {}
 unknown_lock = threading.Lock()
 
@@ -67,7 +76,7 @@ scan_lock = threading.Lock()
 scan_start_time = 0
 scan_frame_count = 0
 SCAN_DURATION = 5          # seconds
-SCAN_MIN_FRAMES = 100      # minimum embeddings to collect
+SCAN_MIN_FRAMES = 10       # minimum embeddings to collect
 
 # Frame skip for performance
 SKIP_FRAMES = 2
@@ -76,22 +85,10 @@ last_results = []
 
 
 def init_models():
-    """Load MTCNN and FaceNet models."""
+    """Load MTCNN and FaceNet models by reusing existing load_models functions."""
     global mtcnn_single, mtcnn_multi, facenet
-
-    mtcnn_single = MTCNN(
-        image_size=160, margin=20, min_face_size=40,
-        thresholds=[0.6, 0.7, 0.7], factor=0.709,
-        keep_all=False, post_process=True, device=device
-    )
-
-    mtcnn_multi = MTCNN(
-        image_size=160, margin=20, min_face_size=40,
-        thresholds=[0.6, 0.7, 0.7], factor=0.709,
-        keep_all=True, post_process=True, device=device
-    )
-
-    facenet = InceptionResnetV1(pretrained="vggface2").eval().to(device)
+    mtcnn_multi, facenet = load_recog_models(device)
+    mtcnn_single, _ = load_build_models(device)
     print(f"[app] Models loaded on {device}")
 
 
@@ -114,65 +111,13 @@ def release_camera():
 
 
 # ---------------------------------------------------------------------------
-# Face processing helpers
+# App-specific helpers (not duplicated from other scripts)
 # ---------------------------------------------------------------------------
-
-def compute_embedding_from_pil(pil_image, single=True):
-    """Detect face(s) and compute embedding(s) from a PIL image.
-
-    Args:
-        pil_image: PIL RGB image.
-        single: If True, return one embedding (for enrolment).
-                If False, return list of (box, embedding) tuples.
-
-    Returns:
-        Single mode: np.ndarray (128,) or None
-        Multi mode:  list of (box_tuple, np.ndarray) or []
-    """
-    if single:
-        face_tensor = mtcnn_single(pil_image)
-        if face_tensor is None:
-            return None
-        face_tensor = face_tensor.unsqueeze(0).to(device)
-        with torch.no_grad():
-            emb = facenet(face_tensor).squeeze().cpu().numpy()
-        return emb
-    else:
-        boxes, _ = mtcnn_multi.detect(pil_image, landmarks=False)
-        face_tensors = mtcnn_multi(pil_image)
-        if boxes is None or face_tensors is None:
-            return []
-        if face_tensors.ndim == 3:
-            face_tensors = face_tensors.unsqueeze(0)
-        face_tensors = face_tensors.to(device)
-        with torch.no_grad():
-            embeddings = facenet(face_tensors).cpu().numpy()
-        results = []
-        for i in range(len(boxes)):
-            results.append((tuple(boxes[i]), embeddings[i]))
-        return results
-
-
-def identify_face(query_embedding, threshold):
-    """Find the closest identity in the database."""
-    best_name = "Unknown"
-    best_distance = float("inf")
-    for person_name, stored_embeddings in database.items():
-        distances = [euclidean_distance(query_embedding, s) for s in stored_embeddings]
-        closest = min(distances)
-        if closest < best_distance:
-            best_distance = closest
-            best_name = person_name
-    if best_distance > threshold:
-        best_name = "Unknown"
-    return best_name, best_distance
-
 
 def crop_face_thumbnail(frame_rgb, box, size=80):
     """Crop a face region from the frame and return as base64 JPEG."""
     h, w = frame_rgb.shape[:2]
     x1, y1, x2, y2 = [int(v) for v in box]
-    # Add some padding
     pad = 15
     x1 = max(0, x1 - pad)
     y1 = max(0, y1 - pad)
@@ -182,7 +127,6 @@ def crop_face_thumbnail(frame_rgb, box, size=80):
     if crop.size == 0:
         return None
     crop = cv2.resize(crop, (size, size))
-    # Convert RGB to BGR for encoding
     crop_bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
     _, buf = cv2.imencode(".jpg", crop_bgr)
     return base64.b64encode(buf).decode("utf-8")
@@ -191,7 +135,6 @@ def crop_face_thumbnail(frame_rgb, box, size=80):
 def find_matching_unknown(embedding, threshold=0.7):
     """Find an existing unknown entry that matches this embedding. Returns uid or None."""
     for uid, info in unknown_people.items():
-        # Compare against the first embedding as the anchor
         dist = euclidean_distance(embedding, info["embeddings"][0])
         if dist < threshold:
             return uid
@@ -228,52 +171,32 @@ def generate_frames():
             fps_counter = 0
             fps_start = time.time()
 
-        # Run detection every N frames
+        # Run detection every N frames — delegates to recognize.process_frame
         if frame_counter % SKIP_FRAMES == 0:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(frame_rgb)
+            results = process_frame(
+                frame, mtcnn_multi, facenet, database, THRESHOLD, device
+            )
 
-            boxes, _ = mtcnn_multi.detect(pil_image, landmarks=False)
-            face_tensors = mtcnn_multi(pil_image)
-
-            results = []
-            if boxes is not None and face_tensors is not None:
-                if face_tensors.ndim == 3:
-                    face_tensors = face_tensors.unsqueeze(0)
-                face_tensors = face_tensors.to(device)
-                with torch.no_grad():
-                    embeddings = facenet(face_tensors).cpu().numpy()
-
-                for i in range(len(boxes)):
-                    name, dist = identify_face(embeddings[i], THRESHOLD)
-                    results.append({
-                        "box": tuple(boxes[i]),
-                        "name": name,
-                        "distance": dist,
-                        "embedding": embeddings[i],
-                    })
-
-                    # If scanning and face is unknown, collect embedding
-                    if scanning_active and name == "Unknown":
-                        with unknown_lock:
-                            match_uid = find_matching_unknown(embeddings[i])
-                            if match_uid:
-                                # Add embedding to existing unknown entry
-                                unknown_people[match_uid]["embeddings"].append(embeddings[i])
-                            else:
-                                # Create new unknown entry
-                                uid = str(uuid.uuid4())[:8]
-                                thumb = crop_face_thumbnail(frame_rgb, boxes[i])
-                                if thumb:
-                                    unknown_people[uid] = {
-                                        "embeddings": [embeddings[i]],
-                                        "thumbnail": thumb,
-                                        "name": "",
-                                    }
-
-                        # Increment global scan frame count
-                        with scan_lock:
-                            scan_frame_count += 1
+            # During scanning, collect ALL detected faces for later naming
+            if scanning_active and results:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                for r in results:
+                    emb = r["embedding"]
+                    with unknown_lock:
+                        match_uid = find_matching_unknown(emb)
+                        if match_uid:
+                            unknown_people[match_uid]["embeddings"].append(emb)
+                        else:
+                            uid = str(uuid.uuid4())[:8]
+                            thumb = crop_face_thumbnail(frame_rgb, r["box"])
+                            if thumb:
+                                unknown_people[uid] = {
+                                    "embeddings": [emb],
+                                    "thumbnail": thumb,
+                                    "name": "",
+                                }
+                    with scan_lock:
+                        scan_frame_count += 1
 
             # Auto-stop: after duration AND min frames met, or hard cap at 2x duration
             if scanning_active:
@@ -325,6 +248,9 @@ def get_database():
 def upload_images():
     """Upload images for a person to add to the database.
 
+    Uses build_database.embed_pil_image for augmentation + embedding,
+    identical to the offline build_database.py pipeline.
+
     Expects multipart form with:
         - name: person's name
         - files: one or more image files
@@ -338,19 +264,20 @@ def upload_images():
         return jsonify({"error": "No files uploaded"}), 400
 
     added = 0
+    new_embs = []
     for f in files:
         try:
             img = Image.open(io.BytesIO(f.read())).convert("RGB")
-            emb = compute_embedding_from_pil(img, single=True)
-            if emb is not None:
-                if name not in database:
-                    database[name] = []
-                database[name].append(emb)
-                added += 1
+            embs = embed_pil_image(img, mtcnn_single, facenet, device)
+            new_embs.extend(embs)
+            added += len(embs)
         except Exception as e:
             print(f"[upload] Error processing file {f.filename}: {e}")
 
     if added > 0:
+        if name not in database:
+            database[name] = []
+        database[name].extend(new_embs)
         save_database(database, DATABASE_PATH)
 
     return jsonify({"name": name, "added": added, "total": len(database.get(name, []))})

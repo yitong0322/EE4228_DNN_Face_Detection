@@ -153,6 +153,9 @@ def identify_face(
     best_distance = float("inf")   # start at infinity; lower is better
 
     for person_name, stored_embeddings in database.items():
+        if not stored_embeddings:
+            continue
+
         # Compute L2 distance to every stored embedding for this person
         distances = [
             euclidean_distance(query_embedding, stored_emb)
@@ -245,9 +248,9 @@ def process_frame(
         embeddings = facenet(face_tensors).cpu().numpy()
 
     # ── Step 4: Match each embedding against the database ────────────────────
-    for i in range(len(boxes)):
+    for i in range(min(len(boxes), len(embeddings))):
         box = boxes[i]            # bounding box [x1, y1, x2, y2]
-        embedding = embeddings[i] # 128-dim vector for this face
+        embedding = embeddings[i] # 512-dim vector for this face
 
         # Find the closest identity in the database
         name, distance = identify_face(embedding, database, threshold)
@@ -256,6 +259,7 @@ def process_frame(
             "box":      tuple(box),
             "name":     name,
             "distance": distance,
+            "embedding": embedding,
         })
 
     return results
