@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Face Recognition System</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f5f5f5;
+    color: #222;
+    min-height: 100vh;
+  }
+
+  /* Header */
+  header {
+    background: #fff;
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  header h1 { font-size: 18px; font-weight: 600; color: #111; }
+
+  /* Layout: camera center + panel right */
+  .main-layout {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 0;
+    height: calc(100vh - 53px);
+  }
+
+  /* Left: camera + dashboard below */
+  .left-area {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Camera */
+  .camera-wrapper {
+    flex: 1;
+    position: relative;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+  .camera-wrapper img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+
+  /* Scan overlay */
+  .scan-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    background: rgba(0,0,0,0.45);
+    z-index: 10;
+    pointer-events: none;
+  }
+  .scan-overlay.active { display: flex; }
+  .scan-overlay .scan-msg {
+    color: #fff;
+    font-size: 22px;
+    font-weight: 600;
+    text-align: center;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  }
+  .scan-overlay .scan-sub {
+    color: rgba(255,255,255,0.85);
+    font-size: 14px;
+    margin-top: 8px;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  }
+  .scan-overlay .scan-progress {
+    margin-top: 16px;
+    width: 200px;
+    height: 4px;
+    background: rgba(255,255,255,0.25);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .scan-overlay .scan-progress-bar {
+    height: 100%;
+    background: #fff;
+    border-radius: 2px;
+    transition: width 0.3s;
+    width: 0%;
+  }
+  .scan-overlay .scan-count {
+    color: rgba(255,255,255,0.7);
+    font-size: 12px;
+    margin-top: 8px;
+  }
+
+  /* Dashboard below camera */
+  .dashboard {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: #e0e0e0;
+    border-top: 1px solid #e0e0e0;
+    min-height: 200px;
+    max-height: 260px;
+  }
+  .dashboard-col {
+    background: #fff;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .dashboard-col h2 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eee;
+  }
+  .dashboard-col h2.known { color: #16a34a; }
+  .dashboard-col h2.unknown { color: #d97706; }
+  .people-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  /* Person card */
+  .person-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: #fafafa;
+    border: 1px solid #eee;
+  }
+  .person-card img {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid #ddd;
+  }
+  .person-card .avatar-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #f0f0f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    color: #888;
+    flex-shrink: 0;
+  }
+  .person-card .info { flex: 1; min-width: 0; }
+  .person-card .info .name { font-size: 13px; font-weight: 600; }
+  .person-card .info .meta { font-size: 11px; color: #999; }
+  .person-card .actions { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
+  .person-card .actions input[type="text"] {
+    width: 90px;
+    padding: 4px 6px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fff;
+    color: #222;
+    font-size: 12px;
+  }
+  .btn-sm { padding: 4px 10px; font-size: 11px; width: auto; }
+  .btn-icon {
+    padding: 3px 7px;
+    font-size: 14px;
+    width: auto;
+    background: transparent;
+    color: #ccc;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .btn-icon:hover { background: #ef4444; color: #fff; border-color: #ef4444; }
+
+  .empty-msg {
+    text-align: center;
+    color: #bbb;
+    font-size: 12px;
+    padding: 20px 0;
+  }
+
+  /* Right: control panel */
+  .control-panel {
+    background: #fff;
+    border-left: 1px solid #e0e0e0;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  .control-panel h2 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #666;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+  }
+  .control-group { margin-bottom: 24px; }
+  .control-group h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 10px;
+  }
+  .control-group p.desc {
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 10px;
+    line-height: 1.5;
+  }
+  .control-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 4px;
+    color: #666;
+  }
+  .control-group input[type="text"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: #fff;
+    color: #222;
+    font-size: 13px;
+    margin-bottom: 8px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .control-group input[type="text"]:focus { border-color: #111; }
+  .control-group input[type="file"] {
+    width: 100%;
+    font-size: 12px;
+    margin-bottom: 10px;
+    color: #666;
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-block;
+    padding: 9px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    width: 100%;
+    text-align: center;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:active { opacity: 0.75; }
+  .btn-primary { background: #111; color: #fff; }
+  .btn-success { background: #16a34a; color: #fff; }
+  .btn-scan { background: #111; color: #fff; }
+  .btn-scan.scanning { background: #ef4444; }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .status-text {
+    font-size: 12px;
+    margin-top: 8px;
+    min-height: 16px;
+    color: #999;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #eee;
+    margin: 4px 0 20px 0;
+  }
+
+  /* Scrollbar */
+  .people-list::-webkit-scrollbar { width: 4px; }
+  .people-list::-webkit-scrollbar-track { background: transparent; }
+  .people-list::-webkit-scrollbar-thumb { background: #ddd; border-radius: 2px; }
+
+  @media (max-width: 900px) {
+    .main-layout { grid-template-columns: 1fr; }
+    .control-panel { border-left: none; border-top: 1px solid #e0e0e0; }
+    .dashboard { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Face Recognition</h1>
+</header>
+
+<div class="main-layout">
+  <!-- Left: Camera + Dashboard -->
+  <div class="left-area">
+    <div class="camera-wrapper">
+      <img id="videoFeed" src="/video_feed" alt="Camera Feed">
+      <!-- Scan overlay -->
+      <div class="scan-overlay" id="scanOverlay">
+        <div class="scan-msg">Please slowly move your head</div>
+        <div class="scan-sub">Look left, right, up, and down</div>
+        <div class="scan-progress"><div class="scan-progress-bar" id="scanProgressBar"></div></div>
+        <div class="scan-count" id="scanCountText">0 frames collected</div>
+      </div>
+    </div>
+
+    <div class="dashboard">
+      <div class="dashboard-col">
+        <h2 class="known">Known People <span id="knownCount" style="font-weight:400; color:#999;"></span></h2>
+        <div class="people-list" id="knownList">
+          <div class="empty-msg">No people in database yet</div>
+        </div>
+      </div>
+      <div class="dashboard-col">
+        <h2 class="unknown">Unknown People <span id="unknownCount" style="font-weight:400; color:#999;"></span></h2>
+        <div class="people-list" id="unknownList">
+          <div class="empty-msg">No unknown faces captured yet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Control Panel -->
+  <div class="control-panel">
+    <h2>Controls</h2>
+
+    <div class="control-group">
+      <h3>Upload Images</h3>
+      <p class="desc">Add a person to the database by uploading their photos.</p>
+      <label>Name</label>
+      <input type="text" id="uploadName" placeholder="e.g. Alice">
+      <label>Photos</label>
+      <input type="file" id="uploadFiles" accept="image/*" multiple>
+      <button class="btn btn-primary" id="uploadBtn" onclick="uploadImages()">Upload</button>
+      <div class="status-text" id="uploadStatus"></div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="control-group">
+      <h3>Camera Scan</h3>
+      <p class="desc">Scan a face from the camera for 5 seconds. Move your head slowly during the scan for best results.</p>
+      <button class="btn btn-scan" id="scanBtn" onclick="startScan()">Start Scan</button>
+      <div class="status-text" id="scanStatus"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let isScanning = false;
+let scanPollTimer = null;
+
+// --- Upload Images ---
+async function uploadImages() {
+  const name = document.getElementById('uploadName').value.trim();
+  const files = document.getElementById('uploadFiles').files;
+  const status = document.getElementById('uploadStatus');
+  const btn = document.getElementById('uploadBtn');
+
+  if (!name) { status.textContent = 'Please enter a name.'; return; }
+  if (files.length === 0) { status.textContent = 'Please select image files.'; return; }
+
+  btn.disabled = true;
+  status.textContent = `Uploading ${files.length} image(s)...`;
+
+  const formData = new FormData();
+  formData.append('name', name);
+  for (let f of files) formData.append('files', f);
+
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.error) {
+      status.textContent = 'Error: ' + data.error;
+    } else {
+      status.textContent = `Added ${data.added} embedding(s) for "${data.name}" (total: ${data.total})`;
+      document.getElementById('uploadName').value = '';
+      document.getElementById('uploadFiles').value = '';
+      refreshKnown();
+    }
+  } catch (e) {
+    status.textContent = 'Upload failed: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+// --- Camera Scan ---
+async function startScan() {
+  if (isScanning) return;
+
+  const btn = document.getElementById('scanBtn');
+  const status = document.getElementById('scanStatus');
+  const overlay = document.getElementById('scanOverlay');
+  const progressBar = document.getElementById('scanProgressBar');
+  const countText = document.getElementById('scanCountText');
+
+  // Start scan on server
+  await fetch('/api/scan/start', { method: 'POST' });
+  isScanning = true;
+  btn.disabled = true;
+  btn.textContent = 'Scanning...';
+  btn.classList.add('scanning');
+  status.textContent = '';
+
+  // Show overlay
+  overlay.classList.add('active');
+  progressBar.style.width = '0%';
+  countText.textContent = '0 frames collected';
+
+  // Poll scan status
+  scanPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/scan/status');
+      const data = await res.json();
+
+      const pct = Math.min(100, (data.elapsed / data.duration) * 100);
+      progressBar.style.width = pct + '%';
+      countText.textContent = data.frame_count + ' frames collected';
+
+      if (!data.scanning) {
+        // Scan finished
+        clearInterval(scanPollTimer);
+        scanPollTimer = null;
+        isScanning = false;
+
+        btn.disabled = false;
+        btn.textContent = 'Start Scan';
+        btn.classList.remove('scanning');
+        overlay.classList.remove('active');
+
+        status.textContent = `Scan complete: ${data.frame_count} frames collected`;
+        refreshUnknown();
+      }
+    } catch (e) {
+      console.error('Scan poll error:', e);
+    }
+  }, 300);
+}
+
+// --- Refresh Known People ---
+async function refreshKnown() {
+  try {
+    const res = await fetch('/api/database');
+    const people = await res.json();
+    const list = document.getElementById('knownList');
+    const count = document.getElementById('knownCount');
+    count.textContent = people.length ? `(${people.length})` : '';
+
+    if (people.length === 0) {
+      list.innerHTML = '<div class="empty-msg">No people in database yet</div>';
+      return;
+    }
+    list.innerHTML = people.map(p => `
+      <div class="person-card">
+        <div class="avatar-placeholder">${p.name.charAt(0).toUpperCase()}</div>
+        <div class="info">
+          <div class="name">${escapeHtml(p.name)}</div>
+          <div class="meta">${p.count} embedding(s)</div>
+        </div>
+        <div class="actions">
+          <button class="btn-icon" onclick="deletePerson('${escapeJs(p.name)}')" title="Remove">&times;</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Failed to refresh known:', e);
+  }
+}
+
+// --- Refresh Unknown People ---
+async function refreshUnknown() {
+  try {
+    const res = await fetch('/api/unknown');
+    const people = await res.json();
+    const list = document.getElementById('unknownList');
+    const count = document.getElementById('unknownCount');
+    count.textContent = people.length ? `(${people.length})` : '';
+
+    if (people.length === 0) {
+      list.innerHTML = '<div class="empty-msg">No unknown faces captured yet</div>';
+      return;
+    }
+    list.innerHTML = people.map(p => `
+      <div class="person-card" id="unknown-${p.uid}">
+        <img src="data:image/jpeg;base64,${p.thumbnail}" alt="face">
+        <div class="info">
+          <input type="text" id="name-${p.uid}" placeholder="Enter name..." value="${escapeHtml(p.name)}">
+          <div class="meta">${p.count} embedding(s)</div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-sm btn-success" onclick="confirmUnknown('${p.uid}')">Confirm</button>
+          <button class="btn-icon" onclick="deleteUnknown('${p.uid}')" title="Remove">&times;</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Failed to refresh unknown:', e);
+  }
+}
+
+// --- Confirm unknown ---
+async function confirmUnknown(uid) {
+  const input = document.getElementById('name-' + uid);
+  const name = input ? input.value.trim() : '';
+  if (!name) { alert('Please enter a name first.'); return; }
+
+  try {
+    const res = await fetch(`/api/unknown/${uid}/name`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (data.success) { refreshKnown(); refreshUnknown(); }
+    else { alert(data.error || 'Failed to confirm.'); }
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function deleteUnknown(uid) {
+  await fetch(`/api/unknown/${uid}`, { method: 'DELETE' });
+  refreshUnknown();
+}
+
+async function deletePerson(name) {
+  if (!confirm(`Remove "${name}" from the database?`)) return;
+  await fetch(`/api/database/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  refreshKnown();
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+function escapeJs(str) {
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+// --- Init ---
+refreshKnown();
+refreshUnknown();
+setInterval(refreshKnown, 10000);
+</script>
+
+</body>
+</html>
