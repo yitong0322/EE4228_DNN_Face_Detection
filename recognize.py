@@ -65,7 +65,7 @@ def parse_args():
         help="OpenCV camera index (0 = default built-in webcam, 1 = first USB cam)."
     )
     parser.add_argument(
-        "--skip-frames", type=int, default=2,
+        "--skip-frames", type=int, default=3,
         help=(
             "Run MTCNN+FaceNet only every N frames to reduce CPU/GPU load. "
             "Between inference frames the last detection result is re-used. "
@@ -79,7 +79,7 @@ def parse_args():
 # Model initialisation (shared with build_database.py)
 # ---------------------------------------------------------------------------
 
-def load_models(device: torch.device, min_face_size: int = 40):
+def load_models(device: torch.device, min_face_size: int = 80):
     """
     Initialise MTCNN and FaceNet for inference.
 
@@ -100,7 +100,7 @@ def load_models(device: torch.device, min_face_size: int = 40):
         margin=20,
         min_face_size=min_face_size,
         thresholds=[0.6, 0.7, 0.7],
-        factor=0.709,
+        factor=0.85,            # larger factor → fewer pyramid levels → faster
         keep_all=True,          # ← differs from build_database.py
         post_process=True,
         device=device
@@ -223,13 +223,19 @@ def process_frame(
     #
     # All three tensors share the same index: boxes[i] and faces[i] correspond
     # to the same detected face.
+   
+    # Detect bounding boxes, then extract aligned face crops from those boxes.
+    # Calling detect() once then extract() avoids running the detection network
+    # twice (which is what separate mtcnn.detect() + mtcnn() calls would do).
     boxes, probs = mtcnn.detect(pil_image, landmarks=False)
 
-    # Also get the aligned face tensors separately
-    face_tensors = mtcnn(pil_image)   # shape: (N, 3, 160, 160) or None
-
     # If no faces were detected, return an empty list immediately
-    if boxes is None or face_tensors is None:
+    if boxes is None:
+        return results
+
+    face_tensors = mtcnn.extract(pil_image, boxes, save_path=None)
+
+    if face_tensors is None:
         return results
 
     # Ensure face_tensors has a batch dimension even when N=1
@@ -291,12 +297,13 @@ def main():
     if not cap.isOpened():
         raise RuntimeError(
             f"Could not open camera with index {args.camera}. "
-            "Try a different index (e.g. --camera 1) or check your camera connection."
+            "Try a different index (e.g. --camera 0) or check your camera connection."
         )
 
-    # Optional: set resolution (comment out if your camera doesn't support it)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    # Lower resolution reduces the image area MTCNN must process, which is the
+    # main speed bottleneck. 640×480 gives a good balance of speed vs. accuracy.
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     print("[recognize] Camera ready. Press 'q' to quit, 's' to save screenshot.")
 

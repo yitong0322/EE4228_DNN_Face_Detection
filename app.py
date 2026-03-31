@@ -6,10 +6,11 @@ Flask web application integrating face database building and real-time recogniti
 Reuses logic from build_database.py, recognize.py, and utils.py — no duplication.
 
 Usage:
-    python app.py [--camera 1] [--threshold 1.0] [--port 5001]
+    python app.py [--camera 0] [--threshold 1.0] [--port 5001]
 """
 
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import io
 import time
 import uuid
@@ -79,7 +80,7 @@ SCAN_DURATION = 5          # seconds
 SCAN_MIN_FRAMES = 10       # minimum embeddings to collect
 
 # Frame skip for performance
-SKIP_FRAMES = 2
+SKIP_FRAMES = 4
 frame_counter = 0
 last_results = []
 
@@ -97,8 +98,8 @@ def get_camera():
     global camera
     if camera is None or not camera.isOpened():
         camera = cv2.VideoCapture(camera_index)
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     return camera
 
 

@@ -88,7 +88,7 @@ A real-time face detection and recognition system built with deep neural network
 ### Web UI (recommended)
 
 ```bash
-python app.py --camera 1 --port 5001
+python app.py --camera 0 --port 5001
 ```
 
 Then open **http://localhost:5001** in your browser.
@@ -117,7 +117,7 @@ Place at least 10 images per person in `dataset/<Name>/`.
 ### CLI: Real-Time Recognition
 
 ```bash
-python recognize.py --database database/faces.pkl --camera 1
+python recognize.py --database database/faces.pkl --camera 0
 ```
 
 Press `q` to quit, `s` to save a screenshot.
