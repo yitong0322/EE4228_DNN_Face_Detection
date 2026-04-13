@@ -21,15 +21,15 @@ import pickle
 
 def euclidean_distance(embedding_a: np.ndarray, embedding_b: np.ndarray) -> float:
     """
-    Compute the Euclidean (L2) distance between two 128-dim face embeddings.
+    Compute the Euclidean (L2) distance between two 512-dim face embeddings.
 
     FaceNet is trained with a triplet loss that pushes same-identity embeddings
     close together and different-identity embeddings far apart in L2 space.
     A smaller distance means the two faces are more likely to be the same person.
 
     Args:
-        embedding_a: 1-D numpy array of shape (128,)
-        embedding_b: 1-D numpy array of shape (128,)
+        embedding_a: 1-D numpy array of shape (512,)
+        embedding_b: 1-D numpy array of shape (512,)
 
     Returns:
         Scalar float representing the L2 distance.
@@ -47,8 +47,8 @@ def cosine_similarity(embedding_a: np.ndarray, embedding_b: np.ndarray) -> float
     when embeddings are not L2-normalised.
 
     Args:
-        embedding_a: 1-D numpy array of shape (128,)
-        embedding_b: 1-D numpy array of shape (128,)
+        embedding_a: 1-D numpy array of shape (512,)
+        embedding_b: 1-D numpy array of shape (512,)
 
     Returns:
         Scalar float in [-1, 1]. Higher is more similar.
@@ -86,7 +86,7 @@ def load_database(database_path: str) -> dict:
         database_path: Path to the .pkl file created by build_database.py
 
     Returns:
-        Dictionary mapping person name -> list of 128-dim numpy arrays.
+        Dictionary mapping person name -> list of 512-dim numpy arrays.
 
     Raises:
         FileNotFoundError: If the database file does not exist yet.

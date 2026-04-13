@@ -79,7 +79,7 @@ def parse_args():
 # Model initialisation (shared with build_database.py)
 # ---------------------------------------------------------------------------
 
-def load_models(device: torch.device, min_face_size: int = 80):
+def load_models(device: torch.device, min_face_size: int = 40):
     """
     Initialise MTCNN and FaceNet for inference.
 
@@ -141,7 +141,7 @@ def identify_face(
         noise from bad angles.
 
     Args:
-        query_embedding: 128-dim numpy array of the face to identify.
+        query_embedding: 512-dim numpy array of the face to identify.
         database:        {name: [emb_1, emb_2, ...]} dictionary.
         threshold:       Maximum Euclidean distance to still call a match.
 
@@ -249,8 +249,8 @@ def process_frame(
     face_tensors = face_tensors.to(device)
 
     with torch.no_grad():
-        # embeddings shape: (N, 128)
-        # Each row is the 128-dimensional face representation for one detection
+        # embeddings shape: (N, 512)
+        # Each row is the 512-dimensional face representation for one detection
         embeddings = facenet(face_tensors).cpu().numpy()
 
     # ── Step 4: Match each embedding against the database ────────────────────

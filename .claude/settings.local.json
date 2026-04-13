@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c \"import ast; ast.parse\\(open\\(''recognize.py''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\(''d:/EE4228/EE4228_DNN_Face_Detection/recognize.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")"
-    ]
-  }
-}

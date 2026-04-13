@@ -21,7 +21,7 @@ Expected dataset folder layout:
 What this script does:
     1. Iterate over every person's image folder.
     2. For each image, use MTCNN to detect and align the face.
-    3. Feed the aligned face crop into FaceNet to get a 128-dim embedding.
+    3. Feed the aligned face crop into FaceNet to get a 512-dim embedding.
     4. Collect all embeddings per person and save them as a pickle file.
 
 The resulting .pkl file is loaded by recognize.py at startup.
@@ -98,8 +98,8 @@ def load_models(device: torch.device):
     InceptionResnetV1 — FaceNet backbone
         A deep Inception-ResNet-v1 architecture pretrained on the VGGFace2
         dataset. Given a 160 × 160 aligned face crop, it produces a 512-dim
-        internal representation which is then L2-normalised to a 128-dim
-        embedding vector. Points that are close in this 128-D space correspond
+        internal representation which is then L2-normalised to a 512-dim
+        embedding vector. Points that are close in this 512-D space correspond
         to the same identity.
 
         pretrained='vggface2' loads weights trained on ~3.3 M images of
