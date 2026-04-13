@@ -363,6 +363,21 @@
       <button class="btn btn-scan" id="scanBtn" onclick="startScan()">Start Scan</button>
       <div class="status-text" id="scanStatus"></div>
     </div>
+
+    <hr class="divider">
+
+    <div class="control-group">
+      <h3>Recognition Threshold</h3>
+      <p class="desc">Lower = stricter matching. Faces with distance above the threshold are labelled Unknown.</p>
+      <label>Threshold: <span id="thresholdValue">1.00</span></label>
+      <input type="range" id="thresholdSlider" min="0" max="200" step="1" value="100"
+             style="width:100%; margin-bottom:8px; cursor:pointer;"
+             oninput="onThresholdInput(this.value)"
+             onchange="applyThreshold(this.value)">
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:#bbb; margin-top:-4px;">
+        <span>0.00 (strict)</span><span>1.00</span><span>2.00 (lenient)</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -556,7 +571,33 @@ function escapeJs(str) {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+// --- Threshold Slider ---
+function onThresholdInput(val) {
+  document.getElementById('thresholdValue').textContent = (val / 100).toFixed(2);
+}
+
+async function applyThreshold(val) {
+  const threshold = val / 100;
+  document.getElementById('thresholdValue').textContent = threshold.toFixed(2);
+  await fetch('/api/threshold', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threshold })
+  });
+}
+
+async function initThreshold() {
+  try {
+    const res = await fetch('/api/threshold');
+    const data = await res.json();
+    const slider = document.getElementById('thresholdSlider');
+    slider.value = Math.round(data.threshold * 100);
+    document.getElementById('thresholdValue').textContent = data.threshold.toFixed(2);
+  } catch (e) { console.error('Failed to fetch threshold:', e); }
+}
+
 // --- Init ---
+initThreshold();
 refreshKnown();
 refreshUnknown();
 setInterval(refreshKnown, 10000);

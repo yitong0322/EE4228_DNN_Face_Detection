@@ -362,6 +362,22 @@ def delete_unknown(uid):
     return jsonify({"success": True})
 
 
+@app.route("/api/threshold", methods=["GET"])
+def get_threshold():
+    return jsonify({"threshold": THRESHOLD})
+
+
+@app.route("/api/threshold", methods=["POST"])
+def set_threshold():
+    global THRESHOLD
+    data = request.get_json()
+    value = data.get("threshold")
+    if value is None or not isinstance(value, (int, float)):
+        return jsonify({"error": "Invalid threshold value"}), 400
+    THRESHOLD = float(value)
+    return jsonify({"threshold": THRESHOLD})
+
+
 @app.route("/api/database/<name>", methods=["DELETE"])
 def delete_person(name):
     """Remove a person from the database."""

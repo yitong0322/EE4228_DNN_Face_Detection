@@ -307,6 +307,16 @@ def main():
 
     print("[recognize] Camera ready. Press 'q' to quit, 's' to save screenshot.")
 
+    # ── Threshold trackbar ───────────────────────────────────────────────────
+    WIN_NAME = "Face Recognition — press q to quit"
+    cv2.namedWindow(WIN_NAME)
+    # Trackbar range: 0–200 → threshold 0.00–2.00 (divided by 100)
+    cv2.createTrackbar(
+        "Threshold x100", WIN_NAME,
+        int(args.threshold * 100), 200,
+        lambda _: None  # no-op; value is read each frame
+    )
+
     # ── State for frame-skipping optimisation ────────────────────────────────
     # Running the full neural network pipeline on every single frame can be
     # slow on CPU. We re-use the detection result from the previous inference
@@ -337,13 +347,16 @@ def main():
             fps_counter    = 0
             fps_start_time = time.time()
 
+        # ── Read live threshold from trackbar ────────────────────────────────
+        threshold = cv2.getTrackbarPos("Threshold x100", WIN_NAME) / 100.0
+
         # ── Run inference only on every Nth frame ────────────────────────────
         # This is a common real-time trick: the bounding boxes move slightly
         # between skipped frames but the identity labels are stable enough that
         # the user does not notice the staleness.
         if frame_counter % args.skip_frames == 0:
             last_results = process_frame(
-                frame, mtcnn, facenet, database, args.threshold, device
+                frame, mtcnn, facenet, database, threshold, device
             )
 
         # ── Draw results on the current frame ────────────────────────────────
@@ -353,14 +366,14 @@ def main():
                 result["box"],
                 result["name"],
                 result["distance"],
-                args.threshold,
+                threshold,
             )
 
         # Overlay the FPS counter
         draw_fps(frame, fps)
 
         # Display the annotated frame in a window titled "Face Recognition"
-        cv2.imshow("Face Recognition — press q to quit", frame)
+        cv2.imshow(WIN_NAME, frame)
 
         # ── Keyboard controls ─────────────────────────────────────────────────
         key = cv2.waitKey(1) & 0xFF
